@@ -6,7 +6,7 @@
  *
  * @package FriendLinks
  * @author Astrsource
- * @version 2.2.3
+ * @version 2.2.4
  * @link https://astrsource.com
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) exit;
@@ -302,7 +302,7 @@ class FriendLinks_Plugin implements PluginInterface
                 padding: 5px 10px;
                 border-radius: 16px;
             }
-        }',
+        ',
             _t('自定义 CSS'), _t('自定义友情链接卡片的 CSS 样式'));
         $form->addInput($customCss);
 
@@ -766,36 +766,52 @@ HTML;
      * @param string $finalUrl 最终重定向后的 URL（用于补全相对路径图标）
      * @return array
      */
-    private static function parseSiteInfo($html, $finalUrl)
-    {
-        $info = ['title' => '', 'description' => '', 'icon' => ''];
+private static function parseSiteInfo($html, $finalUrl)
+{
+    $info = ['title' => '', 'description' => '', 'icon' => ''];
 
-        // 提取标题
-        if (preg_match('/<title[^>]*>(.*?)<\/title>/i', $html, $m)) {
-            $info['title'] = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
-        }
+    // ---- 1. 提取标题：优先 og:title、twitter:title，最后 <title> ----
+    $title = '';
+    // 尝试 og:title
+    if (preg_match('/<meta[^>]+property=["\']og:title["\']\s+content=["\']([^"\']*)["\']/i', $html, $m)) {
+        $title = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    // 尝试 twitter:title
+    if (empty($title) && preg_match('/<meta[^>]+name=["\']twitter:title["\']\s+content=["\']([^"\']*)["\']/i', $html, $m)) {
+        $title = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    // 回退到 <title>
+    if (empty($title) && preg_match('/<title[^>]*>(.*?)<\/title>/i', $html, $m)) {
+        $title = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    $info['title'] = $title;
 
-        // 提取描述
-        $patterns = [
-            '/<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']/i',
-            '/<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']*)["\']/i'
-        ];
-        foreach ($patterns as $p) {
-            if (preg_match($p, $html, $m)) {
-                $info['description'] = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
-                break;
+    // ---- 2. 提取描述：按优先级 og:description > twitter:description > meta description ----
+    $desc = '';
+    if (preg_match('/<meta[^>]+property=["\']og:description["\']\s+content=["\']([^"\']*)["\']/i', $html, $m)) {
+        $desc = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    if (empty($desc) && preg_match('/<meta[^>]+name=["\']twitter:description["\']\s+content=["\']([^"\']*)["\']/i', $html, $m)) {
+        $desc = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    if (empty($desc) && preg_match('/<meta[^>]+name=["\']description["\'][^>]*content=["\']([^"\']*)["\']/i', $html, $m)) {
+        $desc = trim(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'));
+    }
+    $info['description'] = $desc;
+
+    // ---- 3. 提取图标 (原有逻辑，已增强) ----
+    if (preg_match_all('/<link[^>]+>/i', $html, $linkTags)) {
+        foreach ($linkTags[0] as $tag) {
+            $rel = '';
+            $href = '';
+            if (preg_match('/rel=["\']([^"\']*)["\']/i', $tag, $relMatch)) {
+                $rel = $relMatch[1];
             }
-        }
-
-        // 提取图标
-        $iconPatterns = [
-            '/<link[^>]*rel=["\'](?:shortcut )?icon["\'][^>]*href=["\']([^"\']*)["\']/i',
-            '/<link[^>]*rel=["\']apple-touch-icon["\'][^>]*href=["\']([^"\']*)["\']/i'
-        ];
-        foreach ($iconPatterns as $p) {
-            if (preg_match($p, $html, $m)) {
-                $icon = $m[1];
-                // 处理相对路径
+            if (preg_match('/href=["\']([^"\']*)["\']/i', $tag, $hrefMatch)) {
+                $href = $hrefMatch[1];
+            }
+            if ($href && (stripos($rel, 'icon') !== false || stripos($href, 'icon') !== false)) {
+                $icon = $href;
                 if (!preg_match('/^https?:\/\//', $icon)) {
                     $purl = parse_url($finalUrl);
                     $base = $purl['scheme'] . '://' . $purl['host'] . (isset($purl['port']) ? ':' . $purl['port'] : '');
@@ -805,9 +821,107 @@ HTML;
                 break;
             }
         }
-
-        return $info;
     }
+
+    return $info;
+}
+
+    /**
+     * 探测网站根目录下的常见图标文件
+     *
+     * @param string $finalUrl 网站最终 URL
+     * @param int $timeout 超时秒数
+     * @return string 图标 URL，若都不可用返回空字符串
+     */
+    private static function probeIconFromRoot($finalUrl, $timeout = 10)
+    {
+        $purl = parse_url($finalUrl);
+        $base = $purl['scheme'] . '://' . $purl['host'] . (isset($purl['port']) ? ':' . $purl['port'] : '');
+
+        $paths = [
+            '/favicon.ico',
+            '/favicon.png',
+            '/favicon.svg',
+            '/favicon.jpg',
+            '/favicon.jpeg',
+            '/icon.png',
+            '/icon.ico',
+            '/apple-touch-icon.png',
+            '/apple-touch-icon-precomposed.png'
+        ];
+
+        foreach ($paths as $path) {
+            $url = $base . $path;
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_NOBODY         => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS      => 3,
+                CURLOPT_TIMEOUT        => $timeout,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => true,
+                CURLOPT_USERAGENT      => 'Mozilla/5.0',
+                CURLOPT_RETURNTRANSFER => true
+            ]);
+            curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode >= 200 && $httpCode < 400) {
+                return $url;
+            }
+        }
+
+        return '';
+    }
+    
+    /**
+ * 将 HTML 内容从原始编码转换为 UTF-8
+ *
+ * @param string $content 原始内容
+ * @param string $contentTypeHeader Content-Type 头部 (例如 text/html; charset=gbk)
+ * @param string $htmlBody 完整的 HTML 正文 (用于从 meta 中提取 charset)
+ * @return string UTF-8 编码的内容
+ */
+private static function convertToUtf8($content, $contentTypeHeader = '', $htmlBody = '')
+{
+    $charset = '';
+
+    // 1. 从 Content-Type 头部提取 charset
+    if (preg_match('/charset\s*=\s*([^\s;]+)/i', $contentTypeHeader, $m)) {
+        $charset = trim($m[1], '"\'');
+    }
+
+    // 2. 若头部未提供，从 HTML 的 meta 标签中提取
+    if (empty($charset) && !empty($htmlBody)) {
+        if (preg_match('/<meta[^>]+charset\s*=\s*["\']?([^"\'\s;>]+)/i', $htmlBody, $m)) {
+            $charset = $m[1];
+        }
+    }
+
+    // 3. 若仍未知，尝试自动检测
+    if (empty($charset)) {
+        // 仅检测是否为 UTF-8，若不是则按 GBK 处理 (国内网站常见)
+        if (mb_check_encoding($content, 'UTF-8')) {
+            return $content; // 已经是 UTF-8
+        }
+        $charset = 'GBK';
+    }
+
+    // 4. 执行转换 (忽略不支持的字符)
+    if (strtoupper($charset) !== 'UTF-8') {
+        $converted = @mb_convert_encoding($content, 'UTF-8', $charset);
+        if ($converted !== false) {
+            return $converted;
+        }
+        // 转换失败，尝试 GBK 兜底
+        $converted = @mb_convert_encoding($content, 'UTF-8', 'GBK');
+        if ($converted !== false) {
+            return $converted;
+        }
+    }
+    return $content;
+}
 
     /**
      * 抓取单个网站信息（标题、描述、图标、存活状态）
@@ -815,10 +929,63 @@ HTML;
      * @param string $url
      * @return array
      */
-    public static function fetchSiteInfo($url)
-    {
-        $pluginOptions = self::getPluginOptions();
-        $timeout = intval($pluginOptions->timeout ?? 10);
+public static function fetchSiteInfo($url)
+{
+    $pluginOptions = self::getPluginOptions();
+    $timeout = intval($pluginOptions->timeout ?? 10);
+    $url = rtrim($url, '/');
+    if (!preg_match('/^https?:\/\//', $url)) $url = 'https://' . $url;
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0',
+        CURLOPT_ENCODING       => 'gzip, deflate'
+    ]);
+
+    $html = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE); // 获取 Content-Type 头
+    curl_close($ch);
+
+    $alive = ($code >= 200 && $code < 400);
+
+    $info = ['title' => '', 'description' => '', 'icon' => '', 'alive' => $alive];
+
+    if ($code === 200 && $html) {
+        // 编码转换为 UTF-8
+        $html = self::convertToUtf8($html, $contentType, $html);
+        $info = array_merge($info, self::parseSiteInfo($html, $finalUrl));
+    }
+
+    // 若仍未获得图标，则尝试探测根目录图标文件
+    if (empty($info['icon'])) {
+        $info['icon'] = self::probeIconFromRoot($finalUrl, $timeout);
+    }
+
+    return $info;
+}
+
+/**
+ * 批量抓取多个网站信息（使用 curl_multi 并发，图标探测也并发）
+ *
+ * @param array $urls
+ * @return array 键名保持传入顺序的结果数组
+ */
+public static function fetchMultiSiteInfo(array $urls)
+{
+    $timeout = intval(self::getPluginOptions()->timeout ?? 10);
+    $mh1 = curl_multi_init();
+    $handles = [];
+
+    foreach ($urls as $k => $url) {
         $url = rtrim($url, '/');
         if (!preg_match('/^https?:\/\//', $url)) $url = 'https://' . $url;
 
@@ -834,84 +1001,112 @@ HTML;
             CURLOPT_USERAGENT      => 'Mozilla/5.0',
             CURLOPT_ENCODING       => 'gzip, deflate'
         ]);
+        curl_multi_add_handle($mh1, $ch);
+        $handles[$k] = $ch;
+    }
 
-        $html = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-        curl_close($ch);
+    do {
+        curl_multi_exec($mh1, $active);
+        if ($active) curl_multi_select($mh1);
+    } while ($active);
+
+    $results = [];
+    $needProbe = [];
+
+    foreach ($handles as $k => $ch) {
+        $html        = curl_multi_getcontent($ch);
+        $code        = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $finalUrl    = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE); // 获取 Content-Type
 
         $alive = ($code >= 200 && $code < 400);
+        $info  = ['title' => '', 'description' => '', 'icon' => '', 'alive' => $alive];
 
         if ($code === 200 && $html) {
-            $info = self::parseSiteInfo($html, $finalUrl);
-            $info['alive'] = $alive;
-            return $info;
+            // 编码转换
+            $html = self::convertToUtf8($html, $contentType, $html);
+            $info = array_merge($info, self::parseSiteInfo($html, $finalUrl));
         }
 
-        return ['title' => '', 'description' => '', 'icon' => '', 'alive' => $alive];
+        $results[$k] = $info;
+
+        if (empty($info['icon']) && $finalUrl) {
+            $needProbe[$k] = $finalUrl;
+        }
+
+        curl_multi_remove_handle($mh1, $ch);
+        curl_close($ch);
     }
+    curl_multi_close($mh1);
 
-    /**
-     * 批量抓取多个网站信息（使用 curl_multi 并发）
-     *
-     * @param array $urls
-     * @return array 键名保持传入顺序的结果数组
-     */
-    public static function fetchMultiSiteInfo(array $urls)
-    {
-        $mh = curl_multi_init();
-        $handles = $results = [];
-        $timeout = intval(self::getPluginOptions()->timeout ?? 10);
+    // ---------- 第二阶段：并发探测根目录图标 ----------
+    if (!empty($needProbe)) {
+        $mh2 = curl_multi_init();
+        $probeHandles = [];
+        $paths = [
+            '/favicon.ico',
+            '/favicon.png',
+            '/favicon.svg',
+            '/favicon.jpg',
+            '/favicon.jpeg',
+            '/icon.png',
+            '/icon.ico',
+            '/apple-touch-icon.png',
+            '/apple-touch-icon-precomposed.png'
+        ];
 
-        // 初始化所有 curl 句柄
-        foreach ($urls as $k => $url) {
-            $url = rtrim($url, '/');
-            if (!preg_match('/^https?:\/\//', $url)) $url = 'https://' . $url;
+        foreach ($needProbe as $k => $finalUrl) {
+            $purl = parse_url($finalUrl);
+            $base = $purl['scheme'] . '://' . $purl['host'] . (isset($purl['port']) ? ':' . $purl['port'] : '');
 
-            $ch = curl_init();
-            curl_setopt_array($ch, [
-                CURLOPT_URL            => $url,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_MAXREDIRS      => 5,
-                CURLOPT_TIMEOUT        => $timeout,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => false,
-                CURLOPT_USERAGENT      => 'Mozilla/5.0',
-                CURLOPT_ENCODING       => 'gzip, deflate'
-            ]);
-            curl_multi_add_handle($mh, $ch);
-            $handles[$k] = $ch;
+            foreach ($paths as $path) {
+                $probeUrl = $base . $path;
+                $ch = curl_init($probeUrl);
+                curl_setopt_array($ch, [
+                    CURLOPT_NOBODY         => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS      => 3,
+                    CURLOPT_TIMEOUT        => $timeout,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYHOST => false,
+                    CURLOPT_USERAGENT      => 'Mozilla/5.0',
+                    CURLOPT_RETURNTRANSFER => true
+                ]);
+                curl_multi_add_handle($mh2, $ch);
+                $probeHandles[(int)$ch] = ['index' => $k, 'url' => $probeUrl];
+            }
         }
 
-        // 执行并发请求
         do {
-            curl_multi_exec($mh, $active);
-            if ($active) curl_multi_select($mh);
+            curl_multi_exec($mh2, $active);
+            if ($active) curl_multi_select($mh2);
         } while ($active);
 
-        // 收集结果
-        foreach ($handles as $k => $ch) {
-            $html = curl_multi_getcontent($ch);
-            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-            $alive = ($code >= 200 && $code < 400);
-
-            if ($code === 200 && $html) {
-                $info = self::parseSiteInfo($html, $finalUrl);
-                $info['alive'] = $alive;
-            } else {
-                $info = ['title' => '', 'description' => '', 'icon' => '', 'alive' => $alive];
+        $foundIcons = [];
+        foreach ($probeHandles as $chId => $info) {
+            $k = $info['index'];
+            if (isset($foundIcons[$k])) {
+                curl_multi_remove_handle($mh2, curl_multi_get_handle_by_id($mh2, $chId));
+                continue;
             }
-            $results[$k] = $info;
-
-            curl_multi_remove_handle($mh, $ch);
-            curl_close($ch);
+            $httpCode = curl_getinfo(curl_multi_get_handle_by_id($mh2, $chId), CURLINFO_HTTP_CODE);
+            if ($httpCode >= 200 && $httpCode < 400) {
+                $foundIcons[$k] = $info['url'];
+            }
         }
 
-        curl_multi_close($mh);
-        return $results;
+        foreach ($foundIcons as $k => $iconUrl) {
+            $results[$k]['icon'] = $iconUrl;
+        }
+
+        foreach ($probeHandles as $chId => $info) {
+            curl_multi_remove_handle($mh2, curl_multi_get_handle_by_id($mh2, $chId));
+        }
+        curl_multi_close($mh2);
     }
+
+    return $results;
+}
 
     // ==================== 链接 CRUD ====================
 

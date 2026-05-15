@@ -187,7 +187,7 @@ include 'menu.php';
     .category-card .cat-actions { margin-top: 8px; }
     .category-card .cat-actions button { font-size: 12px; padding: 2px 8px; margin-right: 4px; }
     .toolbar { margin: 20px 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .btn { display: inline-block; padding: 8px 16px; border: 1px solid #ddd; border-radius: 4px; text-decoration: none; color: #333; background: #fff; cursor: pointer; }
+    .btn { height: auto;display: inline-block; padding: 8px 16px; border: 1px solid #ddd; border-radius: 4px; text-decoration: none; color: #333; background: #fff; cursor: pointer; }
     .btn-primary { background: #0073aa; border-color: #0073aa; color: #fff; }
     .btn-danger { background: #dc3545; border-color: #dc3545; color: #fff; }
     .btn-warning { background: #ffc107; border-color: #ffc107; color: #333; }
@@ -350,20 +350,38 @@ include 'menu.php';
         <h3>📌 使用说明</h3>
         <p>
             <span style="color: red;">container_class</span>：自定义容器类名<br>
+            <span style="color: red;">card_class</span>：自定义卡片类名<br>
             <span style="color: red;">category_id</span>：按分类ID过滤链接<br>
-            <span style="color: red;">include_uncategorized</span>：是否包含未分类链接（"0"或"false"排除）<br>
-            <span style="color: red;">include_dead</span>：是否包含存活异常的链接（全局设置："0"、包含："1"、仅输出："2"）
+            <span style="color: red;">include_uncategorized</span>： 1=全部(默认), 0=排除未分类, 2=仅未分类<br>
+            <span style="color: red;">include_dead</span>： 0=按全局配置, 1=强制包含异常, 2=仅异常
         </p>
         <h4>1. 短代码示例</h4>
-        <pre>[friendlinks]</pre>
-        <pre>[friendlinks container_class="my-links" card_class="my-card" category_id="1"]</pre>
-        <pre>[friendlinks include_uncategorized="0"]</pre>
-        <pre>[friendlinks include_dead="1"]</pre>
-        <p><span>注意：</span><code>category_id</code><span> 和 </span><code>include_uncategorized</code><span> 可组合使用；当指定 </span><code>category_id</code><span> 时，</span><code>include_uncategorized</code><span> 无效。</span></p>
+        <pre>&lt;!-- 指定分类ID，忽略未分类参数 --&gt;<br>[friendlinks category_id="1"]</pre>
+        <pre>&lt;!-- 带自定义 CSS 类名 --&gt;<br>[friendlinks container_class="my-links" card_class="my-card"]</pre>
+        <pre>&lt;!-- 包含异常链接 --&gt;<br>[friendlinks include_dead="1"]</pre>
+        <pre>&lt;!-- 仅显示异常链接 --&gt;<br>[friendlinks include_dead="2"]</pre>
+        <p><span>注意：</span>其他参数组合（如 <code>category_id</code>）仍优先于 <code>include_uncategorized</code>，即当指定 <code>category_id</code> 时，<code>include_uncategorized</code> 参数将被忽略。</p>
         <h4>2. 模板调用</h4>
-        <pre>&lt;?php FriendLinks_Plugin::output(); ?&gt;</pre>
-        带完整参数（顺序：容器类, 卡片类, 分类ID, 是否包含未分类, 是否包含异常）：
-        <pre>&lt;?php FriendLinks_Plugin::output('friendlinks-container', '', 1, false, true); ?&gt;</pre>
+        <pre>
+&lt;?php
+// 默认输出全部链接
+FriendLinks_Plugin::output();
+
+// 仅输出有分类的链接
+FriendLinks_Plugin::output('friendlinks-container', '', null, 0);
+
+// 仅输出未分类链接
+FriendLinks_Plugin::output('friendlinks-container', '', null, 2);
+
+// 仅输出分类ID为1的链接
+FriendLinks_Plugin::output('friendlinks-container', '', 1);
+
+// 完整参数说明：
+// output($containerClass, $cardClass, $categoryId, $uncategorizedMode, $includeDeadMode);
+// $uncategorizedMode: 1=全部(默认), 0=排除未分类, 2=仅未分类
+// $includeDeadMode: 0=按全局配置, 1=强制包含异常, 2=仅异常
+?&gt;
+        </pre>
         <h4>3. 定时任务</h4>
         <p>Cron URL：</p>
         <pre><?php echo htmlspecialchars($cronUrl); ?></pre>
